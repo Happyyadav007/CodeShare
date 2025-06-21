@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { customAlphabet } from "nanoid";
-import { ref, get } from "firebase/database";
+import { ref, get, set, serverTimestamp } from "firebase/database";
 import { db } from "../firebase";
 import { useState } from "react";
 
@@ -15,6 +15,7 @@ function Home() {
   const createNewDocument = async () => {
     if (isCreating) return;
     setIsCreating(true);
+    setError("");
 
     try {
       let id;
@@ -28,15 +29,23 @@ function Home() {
         const snapshot = await get(docRef);
         exists = snapshot.exists();
 
+        if (!exists) {
+          // Initialize the document with default values
+          await set(docRef, {
+            content: "// Start coding here!\n",
+            language: "javascript",
+            lastUpdated: serverTimestamp(),
+            createdAt: serverTimestamp()
+          });
+          navigate(`/${id}`);
+          return;
+        }
+
         attempts++;
         if (attempts >= maxAttempts) {
-          throw new Error(
-            "Failed to generate unique ID after multiple attempts"
-          );
+          throw new Error("Failed to generate unique ID after multiple attempts");
         }
       } while (exists);
-
-      navigate(`/${id}`, { replace: true });
     } catch (error) {
       console.error("Error creating document:", error);
       setError("Failed to create document. Please try again.");

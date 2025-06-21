@@ -5,7 +5,6 @@ import { ref, onValue, update, onDisconnect, serverTimestamp, goOnline, goOfflin
 import { db } from '../firebase';
 import { FaCopy, FaCheck, FaGlobe, FaCode, FaExclamationTriangle, FaSync } from 'react-icons/fa';
 
-// Connection status constants
 const CONNECTION_STATUS = {
   CONNECTING: 'connecting',
   CONNECTED: 'connected',
@@ -15,7 +14,7 @@ const CONNECTION_STATUS = {
 
 function CodeEditor() {
   const { id } = useParams();
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState('// Start coding here!\n');
   const [language, setLanguage] = useState('javascript');
   const [connectionStatus, setConnectionStatus] = useState(CONNECTION_STATUS.CONNECTING);
   const [copyStatus, setCopyStatus] = useState('');
@@ -27,7 +26,6 @@ function CodeEditor() {
   const languageRef = useRef(language);
   const retryCountRef = useRef(0);
 
-  // Debounced update function with retry logic
   const updateFirebase = useCallback((newCode, newLanguage) => {
     if (pendingUpdateRef.current) {
       clearTimeout(pendingUpdateRef.current);
@@ -42,11 +40,10 @@ function CodeEditor() {
           lastUpdated: serverTimestamp()
         });
         lastSavedRef.current = Date.now();
-        retryCountRef.current = 0; // Reset retry counter on success
+        retryCountRef.current = 0;
       } catch (err) {
         console.error("Update failed:", err);
         
-        // Exponential backoff for retries
         if (retryCountRef.current < 3) {
           retryCountRef.current += 1;
           const delay = Math.min(1000 * Math.pow(2, retryCountRef.current), 8000);
@@ -57,29 +54,25 @@ function CodeEditor() {
           setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
         }
       }
-    }, 500); // 500ms debounce
+    }, 500);
   }, [id]);
 
-  // Handle language changes
   const handleLanguageChange = useCallback((newLanguage) => {
     setLanguage(newLanguage);
     languageRef.current = newLanguage;
     updateFirebase(code, newLanguage);
   }, [code, updateFirebase]);
 
-  // Handle editor changes
   const handleEditorChange = useCallback((value) => {
     setCode(value);
     updateFirebase(value, languageRef.current);
   }, [updateFirebase]);
 
-  // Connection management
   useEffect(() => {
-    goOnline(db); // Ensure we're online when component mounts
+    goOnline(db);
     
     const docRef = ref(db, `documents/${id}`);
     
-    // Set up onDisconnect handler
     const onDisconnectRef = onDisconnect(docRef);
     onDisconnectRef.update({
       connectionStatus: CONNECTION_STATUS.DISCONNECTED
@@ -91,17 +84,15 @@ function CodeEditor() {
       try {
         const data = snapshot.val();
         if (!data) {
-          setError("Room not found or has been deleted.");
+          setError("Room not found. Please create a new room.");
           setConnectionStatus(CONNECTION_STATUS.DISCONNECTED);
           return;
         }
 
-        // Skip if this is our own update
         if (!isFirstLoadRef.current && data.lastUpdated && data.lastUpdated <= lastSavedRef.current) {
           return;
         }
 
-        // Update state if remote data is newer
         setCode(prev => data.content || prev);
         if (data.language && data.language !== languageRef.current) {
           setLanguage(data.language);
@@ -123,7 +114,6 @@ function CodeEditor() {
       setConnectionStatus(CONNECTION_STATUS.RECONNECTING);
       setError("Connection issues. Reconnecting...");
       
-      // Attempt reconnection
       const timer = setTimeout(() => {
         goOnline(db);
         setConnectionStatus(CONNECTION_STATUS.CONNECTING);
@@ -142,11 +132,10 @@ function CodeEditor() {
       onDisconnectRef.cancel().catch(err => {
         console.error("Failed to cancel onDisconnect:", err);
       });
-      goOffline(db); // Go offline when component unmounts
+      goOffline(db);
     };
   }, [id]);
 
-  // Clipboard functions
   const copyLink = useCallback(async () => {
     try {
       const url = `${window.location.origin}/${id}`;
@@ -168,7 +157,6 @@ function CodeEditor() {
     }
   }, [code]);
 
-  // Status indicators
   const connectionStatusIndicator = {
     [CONNECTION_STATUS.CONNECTING]: {
       text: 'Connecting...',
@@ -194,7 +182,6 @@ function CodeEditor() {
 
   return (
     <div className="h-screen w-screen bg-gray-900 text-white flex flex-col">
-      {/* Toolbar */}
       <div className="w-full bg-gray-800 p-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <select 
@@ -248,7 +235,6 @@ function CodeEditor() {
         </div>
       </div>
 
-      {/* Error notification */}
       {error && (
         <div className="w-full bg-red-800 text-white p-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -265,7 +251,6 @@ function CodeEditor() {
         </div>
       )}
       
-      {/* Editor - takes remaining space */}
       <div className="flex-1 overflow-hidden">
         <Editor
           height="100%"
