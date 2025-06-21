@@ -59,7 +59,7 @@ function Home() {
       <div className="w-full h-full flex flex-col items-center justify-center max-w-4xl mx-auto">
         <div className="text-center mb-10">
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-blue-400 mb-4">
-            CodeShare Clone
+            CodeShare
           </h1>
           <p className="text-lg md:text-xl text-gray-400">
             Real-time code collaboration
