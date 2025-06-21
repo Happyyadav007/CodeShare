@@ -7,7 +7,7 @@ import CodeEditor from "./components/Editor";
 function App() {
   return (
     <div>
-      <Router>
+      <Router basename={process.env.PUBLIC_URL} >
         <div className="App">
           <Routes>
             <Route path="/" element={<Home />} />
