@@ -9,6 +9,10 @@ import {
   serverTimestamp,
   goOnline,
   goOffline,
+  push,
+  remove,
+  set,
+  get,
 } from "firebase/database";
 import { db } from "../firebase";
 import {
@@ -43,43 +47,38 @@ function CodeEditor() {
   const lastRemoteUpdate = useRef(0);
   const ignoreNextRemoteUpdate = useRef(false);
   const debounceTimeout = useRef(null);
+    const presenceInterval = useRef(null);
 
-  const updateFirebase = useCallback(
-    (newCode, newLanguage) => {
-      if (ignoreNextRemoteUpdate.current) {
-        // This change was initiated by the current user, so we don't need to re-apply it from Firebase
-        ignoreNextRemoteUpdate.current = false;
-        return;
+const updateFirebase = useCallback(
+  (newCode, newLanguage) => {
+    setIsSaving(true);
+    if (debounceTimeout.current) {
+      clearTimeout(debounceTimeout.current);
+    }
+
+    debounceTimeout.current = setTimeout(async () => {
+      try {
+        const docRef = ref(db, `documents/${id}`);
+        await update(docRef, {
+          content: newCode,
+          language: newLanguage,
+          lastUpdated: serverTimestamp(),
+        });
+        setIsSaving(false);
+        // Set this after successful update
+        ignoreNextRemoteUpdate.current = true;
+      } catch (err) {
+        console.error("Update failed:", err);
+        setError("Failed to save changes. Please check your connection.");
+        setIsSaving(false);
       }
-
-      setIsSaving(true);
-      if (debounceTimeout.current) {
-        clearTimeout(debounceTimeout.current);
-      }
-
-      debounceTimeout.current = setTimeout(async () => {
-        try {
-          const docRef = ref(db, `documents/${id}`);
-          await update(docRef, {
-            content: newCode,
-            language: newLanguage,
-            lastUpdated: serverTimestamp(),
-          });
-          setIsSaving(false);
-        } catch (err) {
-          console.error("Update failed:", err);
-          setError("Failed to save changes. Please check your connection.");
-          setIsSaving(false);
-        }
-      }, 500);
-    },
-    [id]
-  );
+    }, 500);
+  },
+  [id]
+);
 
   const handleEditorChange = useCallback(
     (value, event) => {
-      // For a more advanced setup, you would analyze `event.changes` to create operations for OT.
-      // For this improved version, we're still sending the full content but with better logic to avoid conflicts.
       setCode(value);
       ignoreNextRemoteUpdate.current = true;
       updateFirebase(value, language);
@@ -113,41 +112,51 @@ function CodeEditor() {
     goOnline(db);
     const docRef = ref(db, `documents/${id}`);
 
-    const presenceRef = ref(db, `.info/connected`);
     const userRef = ref(db, `documents/${id}/presence/${Date.now()}`); // A simple way to track presence
 
-    onValue(presenceRef, (snapshot) => {
-      if (snapshot.val() === false) {
-        return;
-      }
 
-      onDisconnect(userRef)
-        .remove()
-        .then(() => {
-          set(userRef, true);
-        });
+  const presenceRef = ref(db, `documents/${id}/presence`);
+    const userPresenceRef = push(presenceRef);
+
+     // Set initial presence
+    set(userPresenceRef, {
+      userId: Date.now(),
+      lastActive: serverTimestamp()
     });
 
-    const unsubscribe = onValue(docRef, (snapshot) => {
+    // Update presence periodically
+    presenceInterval.current = setInterval(() => {
+      update(userPresenceRef, {
+        lastActive: serverTimestamp()
+      });
+    }, 30000);
+
+    // Clean up presence on disconnect
+    onDisconnect(userPresenceRef).remove();
+ const unsubscribe = onValue(docRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
-        // Check if the update is more recent than the last one we received
-        if (data.lastUpdated > lastRemoteUpdate.current) {
-          lastRemoteUpdate.current = data.lastUpdated;
+        const updateTime = data.lastUpdated ? new Date(data.lastUpdated).getTime() : 0;
+        
+        if (updateTime > lastRemoteUpdate.current) {
+          lastRemoteUpdate.current = updateTime;
 
           if (ignoreNextRemoteUpdate.current) {
             ignoreNextRemoteUpdate.current = false;
             return;
           }
 
-          if (data.content !== editorRef.current?.getValue()) {
+          const currentContent = editorRef.current?.getValue();
+          if (data.content !== undefined && data.content !== currentContent) {
+            setCode(data.content);
             const currentPosition = editorRef.current?.getPosition();
             editorRef.current?.setValue(data.content);
             if (currentPosition) {
               editorRef.current?.setPosition(currentPosition);
             }
           }
-          if (data.language !== language) {
+          
+          if (data.language && data.language !== language) {
             setLanguage(data.language);
           }
         }
@@ -160,6 +169,11 @@ function CodeEditor() {
     });
 
     return () => {
+      // Cleanup function
+      if (presenceInterval.current) {
+        clearInterval(presenceInterval.current);
+      }
+      remove(userPresenceRef);
       unsubscribe();
       if (debounceTimeout.current) {
         clearTimeout(debounceTimeout.current);
