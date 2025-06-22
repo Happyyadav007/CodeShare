@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import Editor, { DiffEditor } from "@monaco-editor/react";
+import Editor from "@monaco-editor/react";
 import {
   ref,
   onValue,
@@ -11,8 +11,7 @@ import {
   goOffline,
   push,
   remove,
-  set,
-  get,
+  set
 } from "firebase/database";
 import { db } from "../firebase";
 import {
@@ -23,6 +22,8 @@ import {
   FaExclamationTriangle,
   FaSync,
   FaSave,
+  FaUser,
+  FaUsers
 } from "react-icons/fa";
 
 const CONNECTION_STATUS = {
@@ -42,43 +43,58 @@ function CodeEditor() {
   const [copyStatus, setCopyStatus] = useState("");
   const [error, setError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState([]);
+  const [showUserList, setShowUserList] = useState(false);
 
   const editorRef = useRef(null);
   const lastRemoteUpdate = useRef(0);
   const ignoreNextRemoteUpdate = useRef(false);
   const debounceTimeout = useRef(null);
-    const presenceInterval = useRef(null);
+  const presenceInterval = useRef(null);
+  const userListRef = useRef(null);
 
-const updateFirebase = useCallback(
-  (newCode, newLanguage) => {
-    setIsSaving(true);
-    if (debounceTimeout.current) {
-      clearTimeout(debounceTimeout.current);
-    }
-
-    debounceTimeout.current = setTimeout(async () => {
-      try {
-        const docRef = ref(db, `documents/${id}`);
-        await update(docRef, {
-          content: newCode,
-          language: newLanguage,
-          lastUpdated: serverTimestamp(),
-        });
-        setIsSaving(false);
-        // Set this after successful update
-        ignoreNextRemoteUpdate.current = true;
-      } catch (err) {
-        console.error("Update failed:", err);
-        setError("Failed to save changes. Please check your connection.");
-        setIsSaving(false);
+  // Close user list when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (userListRef.current && !userListRef.current.contains(event.target)) {
+        setShowUserList(false);
       }
-    }, 500);
-  },
-  [id]
-);
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  const updateFirebase = useCallback(
+    (newCode, newLanguage) => {
+      setIsSaving(true);
+      if (debounceTimeout.current) {
+        clearTimeout(debounceTimeout.current);
+      }
+
+      debounceTimeout.current = setTimeout(async () => {
+        try {
+          const docRef = ref(db, `documents/${id}`);
+          await update(docRef, {
+            content: newCode,
+            language: newLanguage,
+            lastUpdated: serverTimestamp(),
+          });
+          setIsSaving(false);
+          ignoreNextRemoteUpdate.current = true;
+        } catch (err) {
+          console.error("Update failed:", err);
+          setError("Failed to save changes. Please check your connection.");
+          setIsSaving(false);
+        }
+      }, 500);
+    },
+    [id]
+  );
 
   const handleEditorChange = useCallback(
-    (value, event) => {
+    (value) => {
       setCode(value);
       ignoreNextRemoteUpdate.current = true;
       updateFirebase(value, language);
@@ -94,34 +110,26 @@ const updateFirebase = useCallback(
     [code, updateFirebase]
   );
 
-  const handleEditorDidMount = (editor, monaco) => {
+  const handleEditorDidMount = (editor) => {
     editorRef.current = editor;
-    // Add undo/redo keybindings
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyZ, () => {
-        editor.trigger('whatever...', 'undo', null);
-    });
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyZ, () => {
-        editor.trigger('whatever...', 'redo', null);
-    });
-     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyY, () => {
-        editor.trigger('whatever...', 'redo', null);
-    });
   };
 
   useEffect(() => {
     goOnline(db);
     const docRef = ref(db, `documents/${id}`);
 
-    const userRef = ref(db, `documents/${id}/presence/${Date.now()}`); // A simple way to track presence
-
-
-  const presenceRef = ref(db, `documents/${id}/presence`);
+    // Presence system setup
+    const presenceRef = ref(db, `documents/${id}/presence`);
     const userPresenceRef = push(presenceRef);
+    const userId = `user_${Date.now()}`;
+    const userName = `User${Math.floor(Math.random() * 1000)}`;
 
-     // Set initial presence
+    // Set initial presence
     set(userPresenceRef, {
-      userId: Date.now(),
-      lastActive: serverTimestamp()
+      userId,
+      name: userName,
+      lastActive: serverTimestamp(),
+      color: `hsl(${Math.floor(Math.random() * 360)}, 70%, 60%)`
     });
 
     // Update presence periodically
@@ -133,7 +141,22 @@ const updateFirebase = useCallback(
 
     // Clean up presence on disconnect
     onDisconnect(userPresenceRef).remove();
- const unsubscribe = onValue(docRef, (snapshot) => {
+
+    // Listen for all users' presence
+    const presenceListener = onValue(presenceRef, (snapshot) => {
+      const presenceData = snapshot.val();
+      if (presenceData) {
+        const users = Object.values(presenceData)
+          .filter(user => user.lastActive)
+          .sort((a, b) => new Date(b.lastActive) - new Date(a.lastActive));
+        
+        setOnlineUsers(users);
+      } else {
+        setOnlineUsers([]);
+      }
+    });
+
+    const unsubscribe = onValue(docRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
         const updateTime = data.lastUpdated ? new Date(data.lastUpdated).getTime() : 0;
@@ -169,11 +192,11 @@ const updateFirebase = useCallback(
     });
 
     return () => {
-      // Cleanup function
       if (presenceInterval.current) {
         clearInterval(presenceInterval.current);
       }
       remove(userPresenceRef);
+      presenceListener();
       unsubscribe();
       if (debounceTimeout.current) {
         clearTimeout(debounceTimeout.current);
@@ -191,13 +214,12 @@ const updateFirebase = useCallback(
       setError(`Failed to copy ${type} to clipboard`);
     }
   };
-    const connectionStatusIndicator = {
+
+  const connectionStatusIndicator = {
     [CONNECTION_STATUS.CONNECTING]: {
       text: "Connecting...",
       color: "yellow",
-      icon: (
-        <span className="inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
-      ),
+      icon: <span className="inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />,
     },
     [CONNECTION_STATUS.CONNECTED]: {
       text: "Connected",
@@ -207,9 +229,7 @@ const updateFirebase = useCallback(
     [CONNECTION_STATUS.DISCONNECTED]: {
       text: "Disconnected",
       color: "red",
-      icon: (
-        <span className="inline-block w-2 h-2 rounded-full bg-red-400 animate-pulse" />
-      ),
+      icon: <span className="inline-block w-2 h-2 rounded-full bg-red-400 animate-pulse" />,
     },
     [CONNECTION_STATUS.RECONNECTING]: {
       text: "Reconnecting...",
@@ -221,8 +241,8 @@ const updateFirebase = useCallback(
   return (
     <div className="h-screen w-screen bg-gray-900 text-white flex flex-col">
       {/* Header */}
-      <div className="w-full bg-gray-800 p-3 flex flex-wrap items-center justify-between gap-3">
-        {/* Language Selector and Status */}
+      <div className="w-full bg-gray-800 p-3 flex flex-wrap items-center justify-between gap-4">
+        {/* Left side - Language and status */}
         <div className="flex items-center gap-4">
           <select
             value={language}
@@ -230,58 +250,102 @@ const updateFirebase = useCallback(
             className="bg-gray-700 text-white p-2 rounded border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
             disabled={connectionStatus !== CONNECTION_STATUS.CONNECTED}
           >
+            <option value="plaintext">Plain Text</option>
             <option value="javascript">JavaScript</option>
             <option value="html">HTML</option>
             <option value="css">CSS</option>
             <option value="python">Python</option>
             <option value="java">Java</option>
-            <option value="plaintext">Plain Text</option>
           </select>
-          <span
-            className={`text-sm flex items-center gap-2 text-${
-              connectionStatusIndicator[connectionStatus].color
-            }-400`}
-          >
-            {connectionStatusIndicator[connectionStatus].icon}
-            {connectionStatusIndicator[connectionStatus].text}
-          </span>
-          {isSaving && (
-            <span className="text-sm flex items-center gap-2 text-yellow-400">
-              <FaSave className="animate-pulse" />
-              Saving...
+          
+          <div className="flex items-center gap-2">
+            <span className={`text-sm flex items-center gap-2 text-${connectionStatusIndicator[connectionStatus].color}-400`}>
+              {connectionStatusIndicator[connectionStatus].icon}
+              {connectionStatusIndicator[connectionStatus].text}
             </span>
-          )}
+            {isSaving && (
+              <span className="text-sm flex items-center gap-2 text-yellow-400">
+                <FaSave className="animate-pulse" />
+                Saving...
+              </span>
+            )}
+          </div>
         </div>
 
-        {/* Room Info and Actions */}
-        <div className="flex items-center gap-3">
-          <span className="hidden sm:inline text-gray-400 text-sm font-mono">
-            Room: {id}
-          </span>
-          <button
-            onClick={() => copyToClipboard(`${window.location.origin}/${id}`, 'link')}
-            className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded flex items-center gap-2 transition-colors"
-            disabled={connectionStatus !== CONNECTION_STATUS.CONNECTED}
-          >
-            {copyStatus === "link" ? (
-              <FaCheck className="text-green-400" />
-            ) : (
-              <FaGlobe className="text-blue-400" />
+        {/* Right side - Room info and actions */}
+        <div className="flex items-center gap-4">
+          {/* Online users */}
+          <div className="relative" ref={userListRef}>
+            <button 
+              onClick={() => setShowUserList(!showUserList)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+            >
+              {onlineUsers.length > 1 ? (
+                <FaUsers className="text-blue-400" />
+              ) : (
+                <FaUser className="text-blue-400" />
+              )}
+              <span className="text-sm text-gray-200">
+                {onlineUsers.length} online
+              </span>
+            </button>
+            
+            {showUserList && onlineUsers.length > 0 && (
+              <div className="absolute right-0 mt-2 w-48 bg-gray-700 rounded-md shadow-lg py-1 z-50">
+                <div className="px-4 py-2 text-xs text-gray-400 border-b border-gray-600">
+                  Online Users
+                </div>
+                <div className="max-h-60 overflow-y-auto">
+                  {onlineUsers.map((user, index) => (
+                    <div key={index} className="flex items-center px-4 py-2 hover:bg-gray-600">
+                      <span 
+                        className="w-3 h-3 rounded-full mr-2" 
+                        style={{ backgroundColor: user.color }}
+                      ></span>
+                      <span className="text-sm text-gray-200 truncate">
+                        {user.name}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
-            <span className="hidden sm:inline">Share</span>
-          </button>
-          <button
-            onClick={() => copyToClipboard(code, 'text')}
-            className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded flex items-center gap-2 transition-colors"
-            disabled={!code || connectionStatus !== CONNECTION_STATUS.CONNECTED}
-          >
-            {copyStatus === "text" ? (
-              <FaCheck className="text-green-400" />
-            ) : (
-              <FaCode className="text-blue-400" />
-            )}
-            <span className="hidden sm:inline">Copy</span>
-          </button>
+          </div>
+
+          {/* Room ID */}
+          <div className="hidden sm:flex items-center bg-gray-700 px-3 py-1.5 rounded">
+            <span className="text-sm text-gray-300 font-mono">
+              Room: {id}
+            </span>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => copyToClipboard(`${window.location.origin}/${id}`, "link")}
+              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded flex items-center gap-2 transition-colors"
+              disabled={connectionStatus !== CONNECTION_STATUS.CONNECTED}
+            >
+              {copyStatus === "link" ? (
+                <FaCheck className="text-green-400" />
+              ) : (
+                <FaGlobe className="text-blue-400" />
+              )}
+              <span className="hidden sm:inline text-sm">Share</span>
+            </button>
+            <button
+              onClick={() => copyToClipboard(code, "text")}
+              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded flex items-center gap-2 transition-colors"
+              disabled={!code || connectionStatus !== CONNECTION_STATUS.CONNECTED}
+            >
+              {copyStatus === "text" ? (
+                <FaCheck className="text-green-400" />
+              ) : (
+                <FaCode className="text-blue-400" />
+              )}
+              <span className="hidden sm:inline text-sm">Copy</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -312,7 +376,9 @@ const updateFirebase = useCallback(
           theme="vs-dark"
           onMount={handleEditorDidMount}
           onChange={handleEditorChange}
-          loading={<div className="text-white text-center p-10">Loading Editor...</div>}
+          loading={
+            <div className="text-white text-center p-10">Loading Editor...</div>
+          }
           options={{
             minimap: { enabled: true },
             fontSize: 14,
