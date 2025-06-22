@@ -29,7 +29,7 @@ class ErrorBoundary extends React.Component {
 function App() {
   return (
     <div>
-      <Router basename={import.meta.env.VITE_PUBLIC_URL}>
+      <Router>
         <ErrorBoundary>
           <div className="App">
             <Routes>
